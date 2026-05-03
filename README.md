@@ -30,7 +30,11 @@ Claude Code automatically loads `CLAUDE.md` files from the current working direc
 
 ## Install
 
-### Personal (available in every project)
+The skill is two steps: drop the file in, then run it once per project to wire up automation.
+
+### 1. Drop the skill in
+
+**Personal (available in every project):**
 
 ```bash
 mkdir -p ~/.claude/skills/mddb
@@ -38,7 +42,7 @@ curl -o ~/.claude/skills/mddb/SKILL.md \
   https://raw.githubusercontent.com/barrinhos123/claude-skill-mddb/main/SKILL.md
 ```
 
-### Project-scoped (only this repo; commits with your code)
+**Project-scoped (only this repo; commits with your code):**
 
 ```bash
 mkdir -p .claude/skills/mddb
@@ -46,26 +50,46 @@ curl -o .claude/skills/mddb/SKILL.md \
   https://raw.githubusercontent.com/barrinhos123/claude-skill-mddb/main/SKILL.md
 ```
 
-### Verify
+### 2. Run the install routine once per project
 
-```bash
-ls ~/.claude/skills/mddb/
-# SKILL.md
+Open a Claude Code session in the repo and run:
+
+```
+/mddb install
 ```
 
-Open a Claude Code session and the skill will be available. It triggers on natural phrasing — you don't invoke it explicitly.
+This wires up two things so the skill triggers itself going forward:
 
-## Usage
+1. **A nudge block in your root `CLAUDE.md`** — always loaded by Claude Code, every conversation. Tells future sessions to prefer `mddb` over auto-memory for codebase context.
+2. **A `UserPromptSubmit` hook in `.claude/settings.json`** — pattern-matches your prompts (`"this folder…"`, `"we always…"`, `"add a rule…"`, `"remember this…"`) and injects a system reminder so the skill kicks in even on phrasings that would otherwise hit the agent's built-in auto-memory first.
 
-Phrases that trigger the skill:
+After this, you don't think about it. Talk normally about the codebase and the skill activates on its own.
+
+The install is idempotent — running it again updates the existing nudge/hook in place rather than duplicating. If your root `CLAUDE.md` is already bloated (>150 lines, full of folder-specific detail), `/mddb install` will also offer a one-time split into per-folder notes — but only with your explicit yes.
+
+## How it triggers (after install)
+
+You don't invoke the skill explicitly. Phrases that wake it up via the hook + the root nudge:
 
 - *"Document this folder."*
 - *"Add a project rule: every user-facing string must be translated."*
 - *"Save what we just figured out to CLAUDE.md."*
-- *"Remember this for next time."*
 - *"We always use the repository pattern for DB access."*
+- *"In this module we cache tokens for 5 minutes."*
 
-The skill also triggers proactively: after Claude spends real effort understanding a folder, it will offer to save a `CLAUDE.md` so the next session doesn't redo the work.
+It also triggers proactively: after Claude spends real effort understanding a folder, it will offer to save a `CLAUDE.md` so the next session doesn't redo the work.
+
+### `mddb` vs. auto-memory
+
+Many Claude Code harnesses ship with an auto-memory system that saves user preferences to a per-user directory outside your repo. `mddb` and auto-memory overlap on phrases like "remember this" — so the skill keeps a clear split:
+
+| Auto-memory (per-user) | mddb (per-codebase) |
+|---|---|
+| Your role, expertise, communication style | What a folder/module does and why |
+| Personal feedback ("don't use emojis") | Project conventions ("strings must be translated") |
+| External-system pointers ("bugs are in Linear") | Business rules and invariants in this repo |
+
+Default rule: if it's about the **code**, it goes in `mddb`. If it's about **you**, auto-memory.
 
 ## Example
 

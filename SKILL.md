@@ -1,6 +1,6 @@
 ---
 name: mddb
-description: Maintains a lightweight "markdown database" of context notes across a codebase. The root CLAUDE.md acts as an index of pointers to per-folder CLAUDE.md files, plus a short list of project-wide rules. Use this skill whenever the user asks to "document this folder", "save what we learned", "add a rule", "remember this for next time", or describes the purpose/logic of a file or folder in a way worth persisting. Also use it proactively when the user states a project-wide convention ("every string must be translated", "always use the repository pattern") — those go in the root. The goal is that next time Claude opens the project, it reads the root index, jumps to the relevant folder note, and understands what it needs without reading the whole codebase.
+description: Persists codebase context as per-folder CLAUDE.md notes plus a root pointer-index, so future sessions get oriented without re-reading the whole repo. **Use proactively** whenever the user describes how a folder/module/file works, states a project-wide convention or rule, or asks to "document this folder", "add a rule", "save this to CLAUDE.md", or "remember this for next time". Prefer this skill over the agent's built-in auto-memory for any content that is about the **codebase itself** — auto-memory is for the user's personal preferences and feedback; mddb is for facts about the code that should live with the repo. Also handles install: invoking the skill with `install` (e.g. `/mddb install`) wires up a UserPromptSubmit hook and a CLAUDE.md nudge so future invocations happen automatically without the user thinking about it.
 ---
 
 # mddb
@@ -20,9 +20,104 @@ This applies to any kind of repo — application code, infrastructure, config, c
 
 ---
 
-## When to use this skill
+## mddb vs. the agent's auto-memory (READ THIS FIRST)
 
-Trigger on any of these signals:
+Many Claude Code harnesses ship with an **auto-memory** system that saves user preferences to a per-user, per-project memory directory outside the repo. That system and this skill overlap on trigger phrases ("remember this", "save for next time"), so it's important to keep their roles separate:
+
+| Belongs in **auto-memory** (per-user, outside repo) | Belongs in **mddb** (per-codebase, in repo) |
+|---|---|
+| The user's role, expertise, communication style | What a folder/module does and why |
+| Personal feedback ("don't use emojis", "be terser") | Project-wide conventions ("strings must be translated") |
+| External-system pointers ("bugs are in Linear INGEST") | Business rules and invariants in this codebase |
+| Things that are true *for this user* across all projects | Things that are true *for this codebase* across all users |
+
+**Default rule:** if the content describes how the *code* works, it goes in mddb (a `CLAUDE.md` file). If it describes how the *user* wants to work, it goes in auto-memory. When unsure, prefer mddb — folder context survives across users and teammates; auto-memory is invisible to anyone else.
+
+---
+
+## Install routine (run once per project)
+
+When the user invokes the skill with `install` / `init` / `setup` (e.g. `/mddb install`), or asks to "set up mddb" / "wire up the mddb skill", perform the following steps **in order**. After each step, briefly tell the user what you did.
+
+### Step 1 — Add the project-rule nudge to root `CLAUDE.md`
+
+This is the **passive** layer: a small block in the always-loaded root `CLAUDE.md` that reminds future sessions to use mddb for codebase context.
+
+- If the project has no root `CLAUDE.md`, create one with the three-section template (see *Root CLAUDE.md structure* below) plus the nudge block.
+- If a root `CLAUDE.md` already exists, append (or update) a section titled `## Persistent context (mddb)` containing exactly:
+
+```markdown
+## Persistent context (mddb)
+
+Use the **mddb** skill to persist context about this codebase:
+- When the user describes how a folder/module/file works, save it to that folder's `CLAUDE.md`.
+- When the user states a project-wide rule or convention, add it to the root `CLAUDE.md` under "Project rules".
+- Keep root under ~100 lines (index only). Per-folder notes 20–80 lines.
+- Prefer mddb over auto-memory for anything about the code itself; auto-memory is for the user's personal preferences.
+```
+
+Do not duplicate this section if it already exists — update in place.
+
+### Step 2 — Install the `UserPromptSubmit` hook
+
+This is the **active** layer: a hook that pattern-matches the user's prompt and injects a reminder so the agent reaches for mddb even on "remember this" type messages.
+
+- Read `.claude/settings.json` if it exists. If not, create it with `{}` as a starting point.
+- Merge in (do not overwrite) a `UserPromptSubmit` entry under `hooks`. The merge must preserve any other hooks the user already has configured.
+- The hook entry to add is:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); echo \"$INPUT\" | grep -qiE '(this (folder|module|directory|file)|document (this|the )?(folder|module|file)|we (always|never)|always use|never use|the rule is|(add|create) (a )?(project )?rule|save (this )?(to )?(claude\\.md|memory|md file)|remember (this )?(for (next|later)|going forward)|in (this|the) (folder|module|directory))' && printf 'mddb hint: this prompt references folder/project/codebase context. If the content is about how the codebase works (folder purpose, conventions, business rules, gotchas), invoke the mddb skill (writes/updates a CLAUDE.md) instead of auto-memory. Auto-memory is for the user'\\''s personal preferences; mddb is for codebase facts that should live with the repo.\\n' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+If a `UserPromptSubmit` array already exists, append this hook entry rather than replacing the array. If a previous mddb hook entry exists (detect by the `mddb hint:` substring in its command), update it in place rather than duplicating.
+
+The command is POSIX-shell, depends only on `cat`, `grep`, and `printf` — no `jq` or other tools needed. It reads the prompt JSON from stdin, greps for trigger phrases, and prints a system reminder to stdout when matched. When unmatched it exits cleanly with no output.
+
+### Step 3 — Offer to bootstrap-split a bloated root CLAUDE.md
+
+Read the current root `CLAUDE.md`. If it is **longer than ~150 lines** or contains substantial folder-specific content (sections describing individual modules, detailed schemas, per-area conventions), tell the user the current root violates the mddb model ("root should be a thin index, not a manual") and **ask** whether they want a one-time split into per-folder notes. Do not split without an explicit yes.
+
+If they agree, perform the split:
+1. Identify natural groupings in the existing root (e.g. "Architecture" section → maybe `core/CLAUDE.md`; "Module X details" → `modules/x/CLAUDE.md`).
+2. Move detailed content into the appropriate per-folder `CLAUDE.md` files (creating folders' notes from the per-folder template).
+3. Replace the moved content in root with one-line pointers under "Where to look".
+4. Keep universal project rules (one-to-three-sentence items) in root under "Project rules".
+5. Aim for root under 100 lines after the split.
+
+### Step 4 — Confirm
+
+Summarize to the user, in 3–5 lines:
+- What was added to root `CLAUDE.md`.
+- Whether the hook was installed (and the path: `.claude/settings.json`).
+- Whether a split was performed, skipped, or declined.
+- One sentence on what they should expect next session.
+
+### Idempotency
+
+The install routine must be safely re-runnable. On a second run:
+- The nudge block in root `CLAUDE.md` is updated in place, not duplicated.
+- The hook entry in `settings.json` is updated in place (detected by the `mddb hint:` marker), not duplicated.
+- The split is not re-offered if the root is already small.
+
+---
+
+## When to use this skill (without `install`)
+
+After install, the hook + the root nudge will surface mddb on relevant prompts. Trigger on any of these signals — proactively, even without an explicit ask:
 
 - User explicitly asks: "document this folder", "save this context", "add this to CLAUDE.md", "remember this for next time".
 - User states a project-wide rule or convention: "every user-facing string must be translated", "we always use X pattern", "never import from Y directly". These go in the **root** under "Project rules".
@@ -32,6 +127,7 @@ Trigger on any of these signals:
 Do NOT trigger for:
 - Trivial folders (`assets/`, `node_modules/`, generated code).
 - One-off notes that belong in a commit message or issue.
+- Personal user preferences (those go to auto-memory, not mddb).
 
 ---
 
@@ -39,7 +135,7 @@ Do NOT trigger for:
 
 These files exist to **save reading time**, not to reproduce the code. If a `CLAUDE.md` is longer than the code it describes, it's wrong.
 
-- Root `CLAUDE.md`: **under 100 lines.** A short list of project rules + a pointer index. That's it.
+- Root `CLAUDE.md`: **under 100 lines.** A short list of project rules + a pointer index + the mddb nudge block. That's it.
 - Per-folder `CLAUDE.md`: **20–80 lines.** One paragraph per important concept, maximum.
 
 If you want to write more, you're explaining code when you should be pointing at it. The note explains **intent, invariants, and gotchas** — not mechanics.
@@ -48,7 +144,7 @@ If you want to write more, you're explaining code when you should be pointing at
 
 ## Root CLAUDE.md structure
 
-The root is **two sections** and nothing else:
+The root is **three sections** and nothing else:
 
 ```markdown
 # Project context
@@ -64,9 +160,12 @@ The root is **two sections** and nothing else:
 - <Domain area B> → `<path>/CLAUDE.md`
 - <Cross-cutting concern, e.g. auth, payments, i18n> → `<path>/CLAUDE.md`
 - <Infrastructure, e.g. deploy scripts, IaC> → `<path>/CLAUDE.md`
+
+## Persistent context (mddb)
+[the nudge block from Step 1 of install]
 ```
 
-The exact rules and pointers will be different for every project — a Go service, a React app, a Dart framework, and a marketing site each have their own vocabulary. The two-section shape stays the same; the content adapts.
+The exact rules and pointers will be different for every project — a Go service, a React app, a Dart framework, and a marketing site each have their own vocabulary. The three-section shape stays the same; the content adapts.
 
 ### Rules for "Project rules"
 
@@ -177,7 +276,7 @@ The shape is what matters — purpose, key files, rules, integrations, gotchas. 
 
 ### When the user states a project-wide rule
 
-1. Read the existing root `CLAUDE.md` (create one with the two-section template if it doesn't exist).
+1. Read the existing root `CLAUDE.md` (create one with the three-section template if it doesn't exist).
 2. Check for duplicates or near-duplicates under "Project rules".
    - Same rule → do nothing.
    - Clearer wording → replace, don't append.
@@ -194,6 +293,16 @@ The shape is what matters — purpose, key files, rules, integrations, gotchas. 
 ### When you (Claude) figured something out the hard way
 
 Same as above — pause and propose a save. The point of this skill is that **the next session shouldn't have to do the same work again**.
+
+### When the user says "remember this" / "save this for next time"
+
+This is the auto-memory collision case. Before saving, classify:
+
+- Is the content about **the user** (preference, role, communication style, external resource)? → Save to auto-memory.
+- Is the content about **the codebase** (folder logic, project rule, business invariant)? → Use mddb instead.
+- If both: save the user-facing part to auto-memory and the codebase part to a `CLAUDE.md`. Tell the user where each piece went.
+
+When unsure, default to mddb — facts about the code should live with the code.
 
 ---
 
@@ -218,3 +327,4 @@ Full rewrite is appropriate only when:
 - **Vague filler.** "This folder contains various utilities." — delete and start over.
 - **Duplicating root rules in folder notes.** If it's in the root, don't repeat it.
 - **Journal entries.** "I refactored this today" does not belong. These are reference docs, not changelogs.
+- **Saving codebase facts to auto-memory.** Project rules, folder logic, and business invariants belong in `CLAUDE.md` (mddb), not in per-user memory.
