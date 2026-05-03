@@ -87,16 +87,24 @@ If a `UserPromptSubmit` array already exists, append this hook entry rather than
 
 The command is POSIX-shell, depends only on `cat`, `grep`, and `printf` — no `jq` or other tools needed. It reads the prompt JSON from stdin, greps for trigger phrases, and prints a system reminder to stdout when matched. When unmatched it exits cleanly with no output.
 
-### Step 3 — Offer to bootstrap-split a bloated root CLAUDE.md
+### Step 3 — Bootstrap-split a bloated root CLAUDE.md
 
-Read the current root `CLAUDE.md`. If it is **longer than ~150 lines** or contains substantial folder-specific content (sections describing individual modules, detailed schemas, per-area conventions), tell the user the current root violates the mddb model ("root should be a thin index, not a manual") and **ask** whether they want a one-time split into per-folder notes. Do not split without an explicit yes.
+Read the current root `CLAUDE.md`.
 
-If they agree, perform the split:
-1. Identify natural groupings in the existing root (e.g. "Architecture" section → maybe `core/CLAUDE.md`; "Module X details" → `modules/x/CLAUDE.md`).
-2. Move detailed content into the appropriate per-folder `CLAUDE.md` files (creating folders' notes from the per-folder template).
+- **If the root is missing, empty, or already a thin index** (<150 lines and no substantial folder-specific content) → **skip this step.** The mddb model is already the shape of the file, or there's nothing to split.
+- **Otherwise → perform the split automatically.** Do not ask permission first. The user opted into the mddb model by running install; the split *is* the install for an existing repo. Asking would re-create the friction this skill exists to remove.
+
+**Safety qualifier — only auto-run when there's a revert path.** Before splitting, check if the project is a git repo (`git rev-parse --git-dir` succeeds). If yes: split silently, report what was done, the user can `git diff` / `git checkout` to review or revert. If the project is **not** a git repo, fall back to asking before destructive edits — without version control, an aggressive auto-split has no undo.
+
+Perform the split:
+
+1. Identify natural groupings in the existing root (e.g. "Architecture" section → `core/CLAUDE.md`; "Module X details" → `modules/x/CLAUDE.md`; "Templates / UI conventions" → `templates/CLAUDE.md`). Use the actual folder structure of the repo to choose targets — only create a folder note where a real folder exists.
+2. Move detailed content into the appropriate per-folder `CLAUDE.md` files (created from the per-folder template). Adapt the section headings to fit the template (Purpose, Key files, Business rules, Integrations, Gotchas).
 3. Replace the moved content in root with one-line pointers under "Where to look".
-4. Keep universal project rules (one-to-three-sentence items) in root under "Project rules".
+4. Keep universal project rules (one-to-three-sentence items) in root under "Project rules". A rule belongs in root if it's true across the whole codebase; if it's specific to one area, push it down to that folder's note.
 5. Aim for root under 100 lines after the split.
+
+The split is a judgment call and you may carve it differently than the user would. That's expected — they have `git diff` to see exactly what moved where, and the granularity of the carve is easy to refine afterward by moving sections between files. Do not get stuck trying to find the "perfect" carve; ship a reasonable one.
 
 ### Step 4 — Confirm
 
@@ -111,7 +119,7 @@ Summarize to the user, in 3–5 lines:
 The install routine must be safely re-runnable. On a second run:
 - The nudge block in root `CLAUDE.md` is updated in place, not duplicated.
 - The hook entry in `settings.json` is updated in place (detected by the `mddb hint:` marker), not duplicated.
-- The split is not re-offered if the root is already small.
+- The split is not re-run if the root is already small (the file is already a thin index).
 
 ---
 

@@ -65,7 +65,9 @@ This wires up two things so the skill triggers itself going forward:
 
 After this, you don't think about it. Talk normally about the codebase and the skill activates on its own.
 
-The install is idempotent — running it again updates the existing nudge/hook in place rather than duplicating. If your root `CLAUDE.md` is already bloated (>150 lines, full of folder-specific detail), `/mddb install` will also offer a one-time split into per-folder notes — but only with your explicit yes.
+3. **A bootstrap split**, if your root `CLAUDE.md` is already bloated (>150 lines, full of folder-specific detail). Install carves the manual into per-folder notes and rewrites the root as a thin pointer index. This happens automatically on git-versioned repos — `git diff` is your review/revert path. On non-git projects the install asks first, since there's no undo.
+
+The install is idempotent — re-running it updates the existing nudge/hook in place rather than duplicating, and won't re-split a root that's already been thinned out.
 
 ## How it triggers (after install)
 
